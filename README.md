@@ -1,0 +1,85 @@
+# 生命刻度 · Life in Days
+
+一个单机的生命管理器：记录你已走过多少年月、距离退休与终点还剩多少天。
+
+- 前端：TypeScript（Vite + 原生 DOM，无框架）
+- 后端：Golang（标准库 `net/http`）
+- 数据库：SQLite（`modernc.org/sqlite` 纯 Go 驱动，免 CGO）
+- 视觉：参考 `C:\Users\AD86\design\DESIGN-CLAUDE.md`（暖奶油画布 #faf9f5 + 珊瑚主色 #cc785c + 深色卡片，衬线大标题 + 人文无衬线正文）
+
+## 功能
+
+1. 打开即用：无需登录即可填写生日并实时计算，页面完全可用
+2. 登录 / 注册（用户名 + 密码，bcrypt 哈希，Cookie 会话 30 天）为弹框形式：访客点击「保存」或导航「登录」时弹出，登录/注册成功后草稿自动存入账户
+3. 补充生日，随时可改（未保存的改动实时生效）
+4. 仪表盘显示出生至今 **X 年 Y 天**（按日历周年精确计算）与累计存活天数
+5. 距退休还剩 N 天（默认 60 岁，可自行设定）
+6. 距终点还剩 N 天（默认 100 岁，可自行设定）
+7. 生命进度卡：已度过百分比、进度条与退休时间点标记
+8. 顶栏浅/深色模式切换（图标按钮，Cookie 记忆偏好，深色保持暖色调）
+9. 顶栏菜单切换页面：生命倒计时 / 贷款计算（hash 路由）
+10. 贷款计算器：商业贷 / 公积金贷 / 组合贷，金额（万，默认 100）、期限（1-30 年，默认 30）、年利率（商贷默认 3.05%、公积金默认 2.6%），等额本息 / 等额本金两种方式，实时计算月供、利息总额、还款总额；组合贷支持商贷与公积金金额拆分（默认 60 万 + 40 万）。纯前端计算，无需登录
+
+## 目录结构
+
+```
+life/
+├── backend/         # Go 后端
+│   ├── main.go      # 入口：flag、路由、静态文件托管（SPA 回退）
+│   ├── store.go     # SQLite 存储层：users / sessions 表
+│   ├── handlers.go  # API 处理器：注册/登录/登出/me/资料
+│   ├── data/        # 运行时生成：life.db（git 忽略）
+│   └── life.exe     # 编译产物（git 忽略）
+└── frontend/
+    ├── index.html
+    ├── src/main.ts  # 全部视图与倒计时逻辑
+    ├── src/style.css# 设计 token 与组件样式
+    └── dist/        # 构建产物（git 忽略），由 Go 托管
+```
+
+## 运行
+
+### 前置
+
+- Go ≥ 1.21（注意：本机 shell 默认 `GO111MODULE=off`，命令前需 `export GO111MODULE=on`）
+- Node ≥ 18
+
+### 构建与启动
+
+```bash
+# 1. 构建前端（产物输出到 frontend/dist）
+cd frontend && npm install && npm run build && cd ..
+
+# 2. 编译并启动后端（需从 backend/ 目录启动，默认监听 127.0.0.1:8080）
+export GO111MODULE=on
+cd backend && go build -o life.exe . && ./life.exe
+```
+
+打开 http://127.0.0.1:8080 即可。数据库文件与数据目录自动创建。
+
+可选参数（路径均相对 backend/ 启动目录）：`-addr 0.0.0.0:8080`（对外监听）、`-db other.db`、`-dist ../frontend/dist`。
+
+### 前端开发模式（热更新）
+
+```bash
+cd frontend && npm run dev   # vite 开发服务器，/api 代理到 127.0.0.1:8080
+```
+
+后端照常运行，浏览器访问 vite 给出的地址（默认 http://localhost:5173）。
+
+## API
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/register` | `{username, password}` → 注册并自动登录 |
+| POST | `/api/login` | `{username, password}` → 登录 |
+| POST | `/api/logout` | 登出，清除会话 |
+| GET | `/api/me` | 当前用户资料（未登录 401） |
+| PUT | `/api/profile` | `{birthday?, retirement_age?, life_expectancy?}` → 更新资料 |
+
+会话为 HttpOnly Cookie（`life_session`），有效期 30 天。校验规则：用户名 1-32 字符、密码 6-72 位、生日格式 `YYYY-MM-DD` 且不晚于今天、退休年龄 1-120、预期寿命 1-150 且不小于退休年龄。
+
+## 测试
+
+- 接口冒烟：注册/重复注册(409)/错误密码(401)/资料更新/非法生日(400)/未登录(401) 均已通过
+- 浏览器端到端：注册 → 补生日 → 倒计时数字与手算一致 → 改设置联动 → 退出重登数据保留，截图见 `gui-test-screenshots/`
