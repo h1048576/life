@@ -1,4 +1,5 @@
 import './style.css'
+import solarLunar, { type SolarLunarResult } from 'solarlunar'
 
 type Me = {
   id: number
@@ -25,6 +26,8 @@ let draft: Draft = { birthday: '2001-01-01', retirement_age: 60, life_expectancy
 // 访客点击「保存」时暂存，登录/注册成功后自动提交
 let pendingSave: Draft | null = null
 let tickTimer: number | undefined
+// 生命页掩码：默认开启防偷窥，所有数据显示 **，点击按钮后显示真实值
+let masked = true
 
 // ---------- 贷款计算器状态 ----------
 type LoanType = 'commercial' | 'fund' | 'combo'
@@ -41,7 +44,24 @@ const loan = {
   rateFund: 2.6, // %
 }
 
-function currentPage(): 'life' | 'loan' {
+// ---------- 个税计算器状态 ----------
+type TaxMode = 'salary' | 'bonus'
+
+const tax = {
+  mode: 'salary' as TaxMode,
+  salary: 20000, // 月薪（税前）
+  insurance: 3000, // 五险一金（月，个人部分）
+  deduction: 1000, // 专项附加扣除（月）
+  bonus: 36000, // 年终奖
+}
+
+// ---------- 万年历状态 ----------
+// y/m 为当前展示的阳历月份，sel 为选中日期（YYYY-MM-DD），默认定位今天
+const cal = { y: new Date().getFullYear(), m: new Date().getMonth() + 1, sel: fmtDate(new Date()) }
+
+function currentPage(): 'life' | 'tax' | 'loan' | 'calendar' {
+  if (location.hash === '#tax') return 'tax'
+  if (location.hash === '#calendar') return 'calendar'
   return location.hash === '#loan' ? 'loan' : 'life'
 }
 
@@ -49,11 +69,54 @@ function defaultDraft(): Draft {
   return { birthday: '2001-01-01', retirement_age: 60, life_expectancy: 100 }
 }
 
+// 访客资料缓存到 localStorage，下次打开自动恢复（登录用户以服务端为准）
+const DRAFT_KEY = 'life-draft'
+
+function saveDraftLocal(): void {
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+  } catch {
+    // 隐私模式等场景写入失败可忽略
+  }
+}
+
+function loadDraftLocal(): Draft | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY)
+    if (!raw) return null
+    const d = JSON.parse(raw) as Partial<Draft>
+    if (
+      typeof d.birthday === 'string' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(d.birthday) &&
+      typeof d.retirement_age === 'number' &&
+      d.retirement_age >= 1 &&
+      d.retirement_age <= 120 &&
+      typeof d.life_expectancy === 'number' &&
+      d.life_expectancy >= 1 &&
+      d.life_expectancy <= 150 &&
+      d.life_expectancy >= d.retirement_age
+    ) {
+      return { birthday: d.birthday, retirement_age: d.retirement_age, life_expectancy: d.life_expectancy }
+    }
+  } catch {
+    // 缓存损坏则忽略，退回默认值
+  }
+  return null
+}
+
 const mark = `<svg class="mark" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>`
 
 const mark15 = mark.replace('width="18" height="18"', 'width="15" height="15"')
 
 const calcIcon15 = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></svg>`
+
+const taxIcon15 = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg>`
+
+const calIcon15 = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>`
+
+const eyeIcon15 = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>`
+
+const eyeOffIcon15 = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`
 
 // ---------- 浅色/深色主题 ----------
 type Theme = 'light' | 'dark'
@@ -170,6 +233,38 @@ function draftFromUser(user: Me): Draft {
   }
 }
 
+// 掩码：设置项变 ** 只读，统计由 tick() 统一显示 **；再点一次恢复真实值
+function applyMask(): void {
+  const b = document.getElementById('s-birthday') as HTMLInputElement | null
+  const r = document.getElementById('s-retire') as HTMLInputElement | null
+  const l = document.getElementById('s-life') as HTMLInputElement | null
+  if (b && r && l) {
+    if (masked) {
+      b.type = 'text'
+      b.readOnly = true
+      b.value = '**/**/**'
+      r.type = 'text'
+      r.readOnly = true
+      r.value = '**'
+      l.type = 'text'
+      l.readOnly = true
+      l.value = '**'
+    } else {
+      b.type = 'date'
+      b.readOnly = false
+      b.value = draft.birthday
+      r.type = 'number'
+      r.readOnly = false
+      r.value = String(draft.retirement_age)
+      l.type = 'number'
+      l.readOnly = false
+      l.value = String(draft.life_expectancy)
+    }
+  }
+  const btn = document.getElementById('mask-toggle')
+  if (btn) btn.innerHTML = masked ? eyeOffIcon15 : eyeIcon15
+}
+
 // ---------- 视图 ----------
 function navRightHtml(): string {
   return `
@@ -190,8 +285,10 @@ function renderApp(): void {
   app.innerHTML = `
   <header class="top-nav">
     <div class="container nav-inner">
-      <a class="nav-link${currentPage() === 'life' ? ' active' : ''}" href="#life">${mark15}生命刻度</a>
       <nav class="nav-menu">
+        <a class="nav-link${currentPage() === 'life' ? ' active' : ''}" href="#life">${mark15}生命刻度</a>
+        <a class="nav-link${currentPage() === 'calendar' ? ' active' : ''}" href="#calendar">${calIcon15}日月历书</a>
+        <a class="nav-link${currentPage() === 'tax' ? ' active' : ''}" href="#tax">${taxIcon15}个税计算</a>
         <a class="nav-link${currentPage() === 'loan' ? ' active' : ''}" href="#loan">${calcIcon15}贷款计算</a>
       </nav>
       <div class="nav-right">${navRightHtml()}</div>
@@ -242,12 +339,16 @@ function renderApp(): void {
 
 // ---------- 页面分发 ----------
 function footerTagline(): string {
+  if (currentPage() === 'tax') return 'Tax Calc — 综合所得与年终奖，税前税后一目了然。'
+  if (currentPage() === 'calendar') return 'Almanac — 阳历阴历同览，节气时令有数。'
   return currentPage() === 'loan'
     ? 'Loan Calc — 月供与总利息实时计算，贷前心里有数。'
     : 'Life in Days — 记录已走过的时间，珍惜剩下的每一天。'
 }
 
 function footerBrandHtml(): string {
+  if (currentPage() === 'tax') return `${taxIcon15}<span>个税计算</span>`
+  if (currentPage() === 'calendar') return `${calIcon15}<span>日月历书</span>`
   return currentPage() === 'loan'
     ? `${calcIcon15}<span>贷款计算</span>`
     : `${mark15}<span>生命刻度</span>`
@@ -256,6 +357,8 @@ function footerBrandHtml(): string {
 function renderPage(): void {
   const main = document.getElementById('main')!
   if (currentPage() === 'loan') renderLoanPage(main)
+  else if (currentPage() === 'tax') renderTaxPage(main)
+  else if (currentPage() === 'calendar') renderCalendarPage(main)
   else renderLifePage(main)
   document.querySelectorAll<HTMLAnchorElement>('.nav-link').forEach((a) => {
     a.classList.toggle('active', a.getAttribute('href') === `#${currentPage()}`)
@@ -287,6 +390,7 @@ function renderLifePage(main: HTMLElement): void {
         <span class="field-label">寿命</span>
         <input type="number" id="s-life" min="1" max="150" required value="${draft.life_expectancy}" />
       </label>
+      <button id="mask-toggle" class="btn btn-secondary" type="button" aria-label="切换掩码"></button>
       ${me || AUTH_ENABLED ? `<div class="settings-actions">
         <button type="submit" class="btn btn-primary">保存</button>
         <span id="settings-msg" class="save-msg" hidden>已保存</span>
@@ -313,7 +417,7 @@ function renderLifePage(main: HTMLElement): void {
   </section>
   <section class="card dark-card">
     <div class="dark-head">
-      <p class="dark-title">生命进度</p>
+      <p class="dark-title">人生几何</p>
       <p class="dark-pct"><span id="pct">–</span><span class="dark-pct-unit">%</span></p>
     </div>
     <div class="bar">
@@ -336,30 +440,42 @@ function renderLifePage(main: HTMLElement): void {
     // 清空日期时回填当前值，统计不中断
     if (!birthdayInput.value) birthdayInput.value = draft.birthday
     else draft.birthday = birthdayInput.value
+    saveDraftLocal()
     tick()
   })
   retireInput.addEventListener('change', () => {
     const v = Number(retireInput.value)
     if (Number.isFinite(v) && v >= 1) draft.retirement_age = Math.min(Math.round(v), 120)
+    saveDraftLocal()
     tick()
   })
   lifeInput.addEventListener('change', () => {
     const v = Number(lifeInput.value)
     if (Number.isFinite(v) && v >= 1) draft.life_expectancy = Math.min(Math.round(v), 150)
+    saveDraftLocal()
     tick()
   })
+
+  document.getElementById('mask-toggle')!.addEventListener('click', () => {
+    masked = !masked
+    applyMask()
+  })
+  applyMask()
 
   document.getElementById('settings-form')!.addEventListener('submit', onSubmitSettings)
 }
 
 async function onSubmitSettings(e: Event): Promise<void> {
   e.preventDefault()
+  // 掩码态下输入框是占位的 **，不读真实值
+  if (masked) return
   const payload: Draft = {
     birthday: (document.getElementById('s-birthday') as HTMLInputElement).value,
     retirement_age: Number((document.getElementById('s-retire') as HTMLInputElement).value),
     life_expectancy: Number((document.getElementById('s-life') as HTMLInputElement).value),
   }
   draft = payload
+  saveDraftLocal()
   tick()
   if (!me) {
     if (!AUTH_ENABLED) return
@@ -702,6 +818,422 @@ function renderLoanResults(): void {
     </article>`
 }
 
+// ---------- 个税计算页 ----------
+type Bracket = { limit: number; rate: number; quick: number }
+
+// 综合所得年度税率表（金额单位：元，rate 为 %）
+const ANNUAL_BRACKETS: Bracket[] = [
+  { limit: 36000, rate: 3, quick: 0 },
+  { limit: 144000, rate: 10, quick: 2520 },
+  { limit: 300000, rate: 20, quick: 16920 },
+  { limit: 420000, rate: 25, quick: 31920 },
+  { limit: 660000, rate: 30, quick: 52920 },
+  { limit: 960000, rate: 35, quick: 85920 },
+  { limit: Number.POSITIVE_INFINITY, rate: 45, quick: 181920 },
+]
+
+// 按月换算税率表（年终奖单独计税，按奖金 ÷ 12 定档，速算扣除只减一次）
+const MONTHLY_BRACKETS: Bracket[] = [
+  { limit: 3000, rate: 3, quick: 0 },
+  { limit: 12000, rate: 10, quick: 210 },
+  { limit: 25000, rate: 20, quick: 1410 },
+  { limit: 35000, rate: 25, quick: 2660 },
+  { limit: 55000, rate: 30, quick: 4410 },
+  { limit: 80000, rate: 35, quick: 7160 },
+  { limit: Number.POSITIVE_INFINITY, rate: 45, quick: 15160 },
+]
+
+function bracketFor(amount: number, brackets: Bracket[]): Bracket {
+  return brackets.find((b) => amount <= b.limit) ?? brackets[brackets.length - 1]
+}
+
+function taxOf(taxable: number, bracket: Bracket): number {
+  return Math.max(taxable * (bracket.rate / 100) - bracket.quick, 0)
+}
+
+// 综合所得（工资薪金）：年度测算 + 累计预扣法逐月明细
+function salaryCalc() {
+  const income = tax.salary * 12
+  const ins = tax.insurance * 12
+  const ded = tax.deduction * 12
+  const taxable = Math.max(income - 60000 - ins - ded, 0)
+  const bracket = bracketFor(taxable, ANNUAL_BRACKETS)
+  const annualTax = taxOf(taxable, bracket)
+  const net = income - ins - annualTax
+
+  // 逐月累计预扣：累计应纳税所得额跨档时当月税额抬升
+  const monthlyBase = tax.salary - tax.insurance - tax.deduction
+  const months: Array<{ month: number; cumTaxable: number; tax: number; takeHome: number }> = []
+  let cumTax = 0
+  let lastTax = 0
+  for (let m = 1; m <= 12; m++) {
+    const cumTaxable = Math.max(monthlyBase * m - 5000 * m, 0)
+    const cum = taxOf(cumTaxable, bracketFor(cumTaxable, ANNUAL_BRACKETS))
+    const monthTax = Math.max(cum - cumTax, 0)
+    cumTax = cum
+    lastTax = monthTax
+    months.push({ month: m, cumTaxable, tax: monthTax, takeHome: monthlyBase - monthTax })
+  }
+  return { income, ins, ded, taxable, bracket, annualTax, net, months, lastTax }
+}
+
+function bonusTaxOf(bonus: number): number {
+  return taxOf(bonus, bracketFor(bonus / 12, MONTHLY_BRACKETS))
+}
+
+// 年终奖盲区：区间内多发不多得（速算扣除只减一次所致）
+function bonusTrapZone(bonus: number): { lower: number; upper: number } | null {
+  for (let i = 0; i < MONTHLY_BRACKETS.length - 1; i++) {
+    const cur = MONTHLY_BRACKETS[i]
+    const next = MONTHLY_BRACKETS[i + 1]
+    const lower = cur.limit * 12
+    if (bonus <= lower) break
+    const upper = Math.round(
+      ((lower * (1 - cur.rate / 100) + cur.quick - next.quick) / (1 - next.rate / 100)) * 100,
+    ) / 100
+    if (bonus <= upper) return { lower, upper }
+  }
+  return null
+}
+
+function renderTaxPage(main: HTMLElement): void {
+  main.innerHTML = `
+  <section class="hero">
+    <p class="caption-uppercase">TAX CALC</p>
+    <h1 class="display-lg">税前与到手</h1>
+  </section>
+  <section class="card settings-card tax-settings">
+    <div class="loan-rows">
+      <div class="loan-row">
+        <div class="field">
+          <span class="field-label">所得类型</span>
+          <div class="seg-tabs" id="tax-mode-tabs">
+            <button class="seg-tab${tax.mode === 'salary' ? ' active' : ''}" data-mode="salary" type="button">综合所得</button>
+            <button class="seg-tab${tax.mode === 'bonus' ? ' active' : ''}" data-mode="bonus" type="button">年终奖</button>
+          </div>
+        </div>
+      </div>
+      <div id="tax-fields"></div>
+    </div>
+  </section>
+  <section class="stats-grid" id="tax-results"></section>
+  <section class="card dark-card" id="tax-detail" hidden></section>`
+
+  const modeTabs = document.getElementById('tax-mode-tabs')!
+  modeTabs.querySelectorAll<HTMLButtonElement>('.seg-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      tax.mode = btn.dataset.mode as TaxMode
+      modeTabs.querySelectorAll('.seg-tab').forEach((b) => b.classList.toggle('active', b === btn))
+      renderTaxFields()
+      renderTaxResults()
+    })
+  })
+
+  renderTaxFields()
+  renderTaxResults()
+}
+
+function renderTaxFields(): void {
+  const wrap = document.getElementById('tax-fields')!
+  const numField = (id: string, label: string, value: number, step = 100) => `
+    <label class="field">
+      <span class="field-label">${label}</span>
+      <input type="number" id="${id}" min="0" max="10000000" step="${step}" required value="${value}" />
+    </label>`
+  const salaryFields = `
+      <div class="loan-row cols-3">
+        ${numField('tax-salary', '税前月薪', tax.salary)}
+        ${numField('tax-insurance', '五险一金', tax.insurance)}
+        ${numField('tax-deduction', '专项附加', tax.deduction)}
+      </div>`
+
+  // 年终奖与综合所得共用月薪参数，便于对比两种计税方式
+  wrap.innerHTML =
+    tax.mode === 'salary'
+      ? salaryFields
+      : `<div class="loan-row cols-4">
+          ${numField('tax-bonus', '年终奖', tax.bonus, 1000)}
+          ${numField('tax-salary', '税前月薪', tax.salary)}
+          ${numField('tax-insurance', '五险一金', tax.insurance)}
+          ${numField('tax-deduction', '专项附加', tax.deduction)}
+        </div>`
+
+  const bindNum = (id: string, apply: (v: number) => void) => {
+    const el = document.getElementById(id)
+    if (!el) return
+    el.addEventListener('change', () => {
+      const v = Number((el as HTMLInputElement).value)
+      if (Number.isFinite(v) && v >= 0) apply(Math.min(v, 10000000))
+      renderTaxResults()
+    })
+  }
+  bindNum('tax-salary', (v) => (tax.salary = v))
+  bindNum('tax-insurance', (v) => (tax.insurance = v))
+  bindNum('tax-deduction', (v) => (tax.deduction = v))
+  bindNum('tax-bonus', (v) => (tax.bonus = v))
+}
+
+function renderTaxResults(): void {
+  const wrap = document.getElementById('tax-results')
+  const detail = document.getElementById('tax-detail')
+  if (!wrap || !detail) return
+
+  if (tax.mode === 'salary') {
+    const s = salaryCalc()
+    const rateNote =
+      s.taxable > 0
+        ? `边际税率 ${s.bracket.rate}% · 应纳税所得额 ${fmtMoney(s.taxable)} 元/年`
+        : '应纳税所得额为 0，暂无需缴税'
+    wrap.innerHTML = `
+      <article class="card feature-card">
+        <p class="card-label">月均个税</p>
+        <p class="stat-num"><span>${fmtMoney(s.annualTax / 12)}</span><span class="stat-unit">元</span></p>
+        <p class="stat-note">全年 ${fmtMoney(s.annualTax)} 元 · 累计预扣法</p>
+      </article>
+      <article class="card feature-card">
+        <p class="card-label">月均到手</p>
+        <p class="stat-num"><span>${fmtMoney(s.net / 12)}</span><span class="stat-unit">元</span></p>
+        <p class="stat-note">全年到手 ${fmtMoney(s.net)} 元</p>
+      </article>
+      <article class="card feature-card">
+        <p class="card-label">有效税率</p>
+        <p class="stat-num"><span>${s.income > 0 ? ((s.annualTax / s.income) * 100).toFixed(2) : '0.00'}</span><span class="stat-unit">%</span></p>
+        <p class="stat-note">${rateNote}</p>
+      </article>`
+
+    detail.hidden = false
+    detail.innerHTML = `
+      <div class="dark-head">
+        <p class="dark-title">全年预扣节奏</p>
+        <p class="dark-pct">${fmtMoney(s.lastTax)}<span class="dark-pct-unit"> 12 月税额</span></p>
+      </div>
+      <table class="tax-table">
+        <thead><tr><th>月份</th><th>累计应纳税所得额</th><th>当月个税</th><th>当月到手</th></tr></thead>
+        <tbody>
+          ${s.months
+            .map(
+              (m) => `
+          <tr>
+            <td>${m.month} 月</td>
+            <td>${fmtMoney(m.cumTaxable)}</td>
+            <td>${fmtMoney(m.tax)}</td>
+            <td>${fmtMoney(m.takeHome)}</td>
+          </tr>`,
+            )
+            .join('')}
+        </tbody>
+      </table>
+      <p class="dark-note">应纳税所得额 = 全年收入 − 6 万减除费用 − 五险一金 − 专项附加；税率跳档时当月个税抬升，前低后高属正常现象。</p>`
+    return
+  }
+
+  // 年终奖：单独计税 vs 并入综合所得
+  const bonus = tax.bonus
+  const sepBracket = bracketFor(bonus / 12, MONTHLY_BRACKETS)
+  const sepTax = bonusTaxOf(bonus)
+  const sepNet = bonus - sepTax
+  const s = salaryCalc()
+  const mergedTaxable = s.taxable + bonus
+  const incTax = Math.max(taxOf(mergedTaxable, bracketFor(mergedTaxable, ANNUAL_BRACKETS)) - s.annualTax, 0)
+  const trap = bonusTrapZone(bonus)
+  const saving = Math.abs(sepTax - incTax)
+  const sepBetter = sepTax <= incTax
+
+  const netNote = trap
+    ? `多发盲区：改发 ${fmtMoney(trap.lower)} 元，到手可多 ${fmtMoney(Math.max(trap.lower - bonusTaxOf(trap.lower) - sepNet, 0))} 元`
+    : bonus > 0
+      ? `到手占奖金 ${((sepNet / bonus) * 100).toFixed(1)}%`
+      : '输入年终奖金额开始计算'
+  const mergeNote =
+    saving < 0.005
+      ? '两种方式个税相同'
+      : `${sepBetter ? '单独计税更划算' : '并入综合所得更划算'}，可省 ${fmtMoney(saving)} 元`
+
+  wrap.innerHTML = `
+    <article class="card feature-card">
+      <p class="card-label">单独计税 · 个税</p>
+      <p class="stat-num"><span>${fmtMoney(sepTax)}</span><span class="stat-unit">元</span></p>
+      <p class="stat-note">税率 ${sepBracket.rate}% · 速算扣除 ${fmtInt(sepBracket.quick)} 元</p>
+    </article>
+    <article class="card feature-card">
+      <p class="card-label">单独计税 · 到手</p>
+      <p class="stat-num"><span>${fmtMoney(sepNet)}</span><span class="stat-unit">元</span></p>
+      <p class="stat-note">${netNote}</p>
+    </article>
+    <article class="card feature-card">
+      <p class="card-label">并入综合所得 · 增税</p>
+      <p class="stat-num"><span>${fmtMoney(incTax)}</span><span class="stat-unit">元</span></p>
+      <p class="stat-note">${mergeNote}</p>
+    </article>`
+  detail.hidden = true
+}
+
+// ---------- 万年历页 ----------
+// 公历节日（月-日）
+const SOLAR_FEST: Record<string, string> = { '1-1': '元旦', '5-1': '劳动节', '10-1': '国庆节' }
+// 农历节日（农历月-农历日，闰月不过）
+const LUNAR_FEST: Record<string, string> = { '1-1': '春节', '5-5': '端午', '8-15': '中秋' }
+
+function lunarOf(date: Date): SolarLunarResult | -1 {
+  return solarLunar.solar2lunar(date.getFullYear(), date.getMonth() + 1, date.getDate())
+}
+
+function renderCalendarPage(main: HTMLElement): void {
+  main.innerHTML = `
+  <section class="hero">
+    <p class="caption-uppercase">ALMANAC</p>
+    <h1 class="display-lg" id="cal-hero"></h1>
+    <p class="hero-sub" id="cal-hero-sub"></p>
+  </section>
+  <section class="card settings-card cal-toolbar">
+    <button id="cal-prev" class="btn btn-secondary" type="button" aria-label="上一月">‹</button>
+    <select id="cal-year" aria-label="选择年份"></select>
+    <span class="cal-unit">年</span>
+    <select id="cal-month" aria-label="选择月份"></select>
+    <span class="cal-unit">月</span>
+    <button id="cal-next" class="btn btn-secondary" type="button" aria-label="下一月">›</button>
+    <button id="cal-today" class="btn btn-secondary" type="button">回到今天</button>
+  </section>
+  <section class="card dark-card cal-card">
+    <div class="cal-week">
+      <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span class="wk-end">六</span><span class="wk-end">日</span>
+    </div>
+    <div class="cal-grid" id="cal-grid"></div>
+  </section>`
+
+  document.getElementById('cal-prev')!.addEventListener('click', () => navMonth(-1))
+  document.getElementById('cal-next')!.addEventListener('click', () => navMonth(1))
+  document.getElementById('cal-today')!.addEventListener('click', goToday)
+
+  // 年月下拉：1900-2100 任意跳转
+  const yearSel = document.getElementById('cal-year') as HTMLSelectElement
+  const monthSel = document.getElementById('cal-month') as HTMLSelectElement
+  for (let y = 1900; y <= 2100; y++) yearSel.appendChild(new Option(String(y), String(y)))
+  for (let m = 1; m <= 12; m++) monthSel.appendChild(new Option(String(m), String(m)))
+  yearSel.addEventListener('change', () => {
+    cal.y = Number(yearSel.value)
+    renderCalGrid()
+  })
+  monthSel.addEventListener('change', () => {
+    cal.m = Number(monthSel.value)
+    renderCalGrid()
+  })
+
+  syncCalSelects()
+  renderCalHero()
+  renderCalGrid()
+}
+
+// 翻月/跳转后同步年月下拉的显示值
+function syncCalSelects(): void {
+  const yearSel = document.getElementById('cal-year') as HTMLSelectElement | null
+  const monthSel = document.getElementById('cal-month') as HTMLSelectElement | null
+  if (yearSel) yearSel.value = String(cal.y)
+  if (monthSel) monthSel.value = String(cal.m)
+}
+
+// 顶部展示选中日期：阳历大字 + 星期/农历/干支生肖
+function renderCalHero(): void {
+  const [y, m, d] = cal.sel.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  const res = lunarOf(date)
+  if (res === -1) {
+    setText('cal-hero', `${y} 年 ${m} 月 ${d} 日`)
+    setText('cal-hero-sub', '农历换算支持 1900-2100 年')
+    return
+  }
+  setText('cal-hero', `${y} 年 ${m} 月 ${d} 日`)
+  setText('cal-hero-sub', `${res.ncWeek} · 农历${res.monthCn}${res.dayCn} · ${res.gzYear}${res.animal}年`)
+}
+
+function renderCalGrid(): void {
+  const grid = document.getElementById('cal-grid')
+  if (!grid) return
+  const today = fmtDate(new Date())
+  // 周一为第一列，补齐月初前的空位
+  const lead = (new Date(cal.y, cal.m - 1, 1).getDay() + 6) % 7
+  let html = ''
+  for (let i = 0; i < 42; i++) {
+    const date = new Date(cal.y, cal.m - 1, 1 - lead + i)
+    const inMonth = date.getMonth() === cal.m - 1 && date.getFullYear() === cal.y
+    const key = fmtDate(date)
+    const jsDay = date.getDay()
+    const cls = ['cal-cell']
+    if (!inMonth) cls.push('out')
+    if (jsDay === 0 || jsDay === 6) cls.push('wk-end')
+    if (key === today) cls.push('today')
+    if (key === cal.sel) cls.push('selected')
+    html += `<button class="${cls.join(' ')}" data-date="${key}" type="button">${calCellInner(date)}</button>`
+  }
+  grid.innerHTML = html
+  grid.querySelectorAll<HTMLButtonElement>('.cal-cell').forEach((btn) => {
+    btn.addEventListener('click', () => selectDay(btn.dataset.date!))
+  })
+}
+
+// 单元格文字优先级：节日 > 节气 > 农历初一显月名 > 农历日
+function calCellInner(date: Date): string {
+  const m = date.getMonth() + 1
+  const d = date.getDate()
+  const res = lunarOf(date)
+  let label = '–'
+  let cls = 'cal-lunar'
+  if (res !== -1) {
+    const fest = SOLAR_FEST[`${m}-${d}`] || (!res.isLeap && LUNAR_FEST[`${res.lMonth}-${res.lDay}`]) || ''
+    if (fest) {
+      label = fest
+      cls += ' fest'
+    } else if (res.term) {
+      label = res.term
+      cls += ' term'
+    } else if (res.lDay === 1) {
+      label = res.monthCn
+    } else {
+      label = res.dayCn
+    }
+  }
+  return `<span class="cal-solar">${d}</span><span class="${cls}">${label}</span>`
+}
+
+function navMonth(delta: number): void {
+  let m = cal.m + delta
+  let y = cal.y
+  if (m < 1) {
+    m = 12
+    y--
+  } else if (m > 12) {
+    m = 1
+    y++
+  }
+  cal.y = y
+  cal.m = m
+  syncCalSelects()
+  renderCalGrid()
+}
+
+function selectDay(key: string): void {
+  cal.sel = key
+  const [y, m] = key.split('-').map(Number)
+  // 点击相邻月的日期时，视图切到对应月份
+  if (y !== cal.y || m !== cal.m) {
+    cal.y = y
+    cal.m = m
+    syncCalSelects()
+  }
+  renderCalHero()
+  renderCalGrid()
+}
+
+function goToday(): void {
+  const now = new Date()
+  cal.y = now.getFullYear()
+  cal.m = now.getMonth() + 1
+  cal.sel = fmtDate(now)
+  syncCalSelects()
+  renderCalHero()
+  renderCalGrid()
+}
+
 // ---------- 每秒刷新 ----------
 function tick(): void {
   if (currentPage() !== 'life' || !draft.birthday) return
@@ -710,29 +1242,32 @@ function tick(): void {
 
   const { years, days } = ageParts(birth, now)
   const totalDays = Math.max(diffDays(birth, now), 0)
-  setText('age-years', String(years))
-  setText('age-days', String(days))
-  setText('ticker-days', fmtInt(totalDays))
-
   const retireDate = addYears(birth, draft.retirement_age)
   const deathDate = addYears(birth, draft.life_expectancy)
-  setText('retire-label', fmtDate(retireDate))
-  setText('life-label', fmtDate(deathDate))
-  setText('retire-days', fmtInt(Math.max(diffDays(now, retireDate), 0)))
-  setText('life-days', fmtInt(Math.max(diffDays(now, deathDate), 0)))
-
   const totalLife = Math.max(diffDays(birth, deathDate), 1)
   const pctVal = Math.min(Math.max((totalDays / totalLife) * 100, 0), 100)
   const retirePct = Math.min(Math.max((diffDays(birth, retireDate) / totalLife) * 100, 0), 100)
+
+  // 掩码态：个人数据显示 **/**/** 或 **；进度条与进度百分比不掩
+  const maskDate = '**/**/**'
+  const M = '**'
+  setText('age-years', masked ? M : String(years))
+  setText('age-days', masked ? M : String(days))
+  setText('ticker-days', masked ? M : fmtInt(totalDays))
+  setText('retire-label', masked ? maskDate : fmtDate(retireDate))
+  setText('retire-days', masked ? M : fmtInt(Math.max(diffDays(now, retireDate), 0)))
+  setText('life-label', masked ? maskDate : fmtDate(deathDate))
+  setText('life-days', masked ? M : fmtInt(Math.max(diffDays(now, deathDate), 0)))
+
   setStyle('bar-fill', 'width', pctVal.toFixed(3) + '%')
   setStyle('bar-marker', 'left', retirePct.toFixed(3) + '%')
   setStyle('marker-label', 'left', Math.min(Math.max(retirePct, 10), 90).toFixed(3) + '%')
-  setText('pct', pctVal.toFixed(2))
-  setText('pct-detail', `${fmtInt(totalDays)} / ${fmtInt(totalLife)} 天`)
-  setText('pct-day', `${((100 / totalLife) * 1).toFixed(4)}%`)
-  setText('legend-birth', draft.birthday)
-  setText('legend-retire', fmtDate(retireDate))
-  setText('legend-death', fmtDate(deathDate))
+  setText('pct', masked ? M : pctVal.toFixed(2))
+  setText('pct-detail', masked ? `${M} / ${M} 天` : `${fmtInt(totalDays)} / ${fmtInt(totalLife)} 天`)
+  setText('pct-day', masked ? '**%' : `${((100 / totalLife) * 1).toFixed(4)}%`)
+  setText('legend-birth', masked ? maskDate : draft.birthday)
+  setText('legend-retire', masked ? maskDate : fmtDate(retireDate))
+  setText('legend-death', masked ? maskDate : fmtDate(deathDate))
 }
 
 async function boot(): Promise<void> {
@@ -743,7 +1278,7 @@ async function boot(): Promise<void> {
     draft = draftFromUser(me)
   } catch {
     me = null
-    draft = defaultDraft()
+    draft = loadDraftLocal() ?? defaultDraft()
   }
   renderApp()
 }
